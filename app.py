@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QToolButton, QStatusBar,
     QHBoxLayout, QVBoxLayout, QFormLayout, QSizePolicy
 )
-from PyQt6.QtCore import QObject, Qt, QSize, pyqtSignal, QEvent, QThread
+from PyQt6.QtCore import QObject, Qt, QSize, pyqtSignal, QEvent, QThread, QMutex, QMutexLocker
 from PyQt6.QtGui import QIcon, QTextCursor
 from chatgpt import ChatGPT
 from db import ChatGPTDatabase
@@ -24,11 +24,15 @@ def current_timestamp(format_pattern='%y_%m_%d_%H%M%S'):
 
 class ChatGPTThread(QThread):
     requestFinished = pyqtSignal()
+    updateConversation_signal = pyqtSignal(str, str, int)
+    updateStatus_signal = pyqtSignal(str, str)
+    clearInput_signal = pyqtSignal()
     
     def __init__(self, parent):
-        super().__init__(parent)
+        super().__init__()
         self._stopped = True
         self.parent = parent
+        self.mutex = parent.mutex
     
     # When we run t.start(), this method will be triggered
     def run(self):
@@ -36,60 +40,79 @@ class ChatGPTThread(QThread):
         response = None
         prompt_string = self.parent.message_input.toPlainText()
         
+
         # Create a text cursor
-        text_cursor = self.parent.conversation_window.textCursor()
-        # Move the cursor to the end
-        text_cursor.movePosition(QTextCursor.MoveOperation.End)
-        # Set the cusor position as the current text window's cursor position
-        self.parent.conversation_window.setTextCursor(text_cursor)
-        # Insert the conversation by following the format
-        self.parent.conversation_window.insertHtml('<p style="colore:#5caa00"> <strong>[User]: </strong><br>')
-        self.parent.conversation_window.insertHtml(prompt_string)
-        self.parent.conversation_window.insertHtml('<br')
-        self.parent.conversation_window.insertHtml('<br')
+        with QMutexLocker(self.mutex):
+            # text_cursor = self.parent.conversation_window.textCursor()
+            # # Move the cursor to the end
+            # text_cursor.movePosition(QTextCursor.MoveOperation.End)
+            # # Set the cusor position as the current text window's cursor position
+            # self.parent.conversation_window.setTextCursor(text_cursor)
+            # # Insert the conversation by following the format
+            # self.parent.conversation_window.insertHtml('<p style="colore:#5caa00"> <strong>[User]: </strong><br>')
+            # self.parent.conversation_window.insertHtml(prompt_string)
+            # self.parent.conversation_window.insertHtml('<br')
+            # self.parent.conversation_window.insertHtml('<br')
 
-         # make an api call to OpenAI ChatGPT model
-        max_tokens = self.parent.max_tokens.value()   
-        temperature = float('{0: .2f}'.format(self.parent.temperature.value() / 100))
-        try:
-            while response is None:
-                response = self.parent.chatgpt.send_request(prompt_string.strip(), max_tokens, temperature)
-                if 'error' in response:
-                    self.parent.status.setStyleSheet('''
-                        color: red;
-                    ''')
-                    self.parent.clear_input()
-                    self.parent.status.showMessage(response['error'].user_message)
-                    return
-                else:
-                    self.parent.status.setStyle.setStyleSheet('''
-                        color: white;
-                    ''')
-                    # convert the markdown response to html
-                    markdown_converted = markdown.markdown(response['content'].strip())
+            self.updateConversation_signal.emit('user', prompt_string, 0)
+            
+            # make an api call to OpenAI ChatGPT model
+            max_tokens = self.parent.max_tokens.value()   
+            temperature = float('{0: .2f}'.format(self.parent.temperature.value() / 100))
+            try:
+                while response is None:
+                    response = self.parent.chatgpt.send_request(prompt_string.strip(), max_tokens, temperature)
+                    if 'error' in response:
+                        # self.parent.status.setStyleSheet('''
+                        #     color: red;
+                        # ''')
+                        # self.parent.clear_input()
+                        # self.parent.status.showMessage(response['error'].user_message)
+                        self.clearInput_signal.emit()
+                        self.updateStatus_signal.emit('error', str(response['error']))
+                        return
+                    else:
+                        # self.parent.status.setStyle.setStyleSheet('''
+                        #     color: white;
+                        # ''')
+                        
+                        # # Create a text cursor
+                        # text_cursor = self.parent.conversation_window.textCursor()
+                        # # Move the cursor to the end
+                        # text_cursor.movePosition(QTextCursor.MoveOperation.End)
+                        # # Set the cusor position as the current text window's cursor position
+                        # self.parent.converstion_window.setTextCursor(text_cursor)
+                        # # Insert the conversation by following the format
+                        # self.parent.conversation_window.insertHtml('<p style="colore:#fd9620"> <strong>[AI Assistant]: </strong><br>')
+                        # self.parent.conversation_window.insertHtml(markdown_converted)
+                        # self.parent.conversation_window.insertHtml('<br')
+                        # self.parent.conversation_window.insertHtml('<br')
 
-                    # Create a text cursor
-                    text_cursor = self.parent.conversation_window.textCursor()
-                    # Move the cursor to the end
-                    text_cursor.movePosition(QTextCursor.MoveOperation.End)
-                    # Set the cusor position as the current text window's cursor position
-                    self.parent.converstion_window.setTextCursor(text_cursor)
-                    # Insert the conversation by following the format
-                    self.parent.conversation_window.insertHtml('<p style="colore:#fd9620"> <strong>[AI Assistant]: </strong><br>')
-                    self.parent.conversation_window.insertHtml(markdown_converted)
-                    self.parent.conversation_window.insertHtml('<br')
-                    self.parent.conversation_window.insertHtml('<br')
-                    self.parent.status.showMessage('Tokens used: {0}'.format(response['usage']))
-                    self.requestFinished.emit()
-        except Exception as e:
-            print(e)
+                        # self.parent.status.showMessage('Tokens used: {0}'.format(response['usage']))
+                        # convert the markdown response to html
+                        markdown_converted = markdown.markdown(response['content'].strip())
+
+                        self.updateConversation_signal.emit('ai', markdown_converted, response['usage'])
+                        
+                        self.requestFinished.emit()
+            except Exception as e:
+                print(e)
             
 
 class AIAssistant(QWidget):
     def __init__(self, parent=None):
         super().__init__()  
         self.chatgpt = ChatGPT(API_KEY)
+        self.mutex = QMutex()
         self.t = ChatGPTThread(self)
+        # Connect the clearInput signal
+        self.t.clearInput_signal.connect(self.clear_input)
+
+        # Connect the updateStatus signal
+        self.t.updateStatus_signal.connect(self.update_status)
+
+        # Connect the updateConversation signal
+        self.t.updateConversation_signal.connect(self.update_conversation)
 
         self.layout = {}
         self.layout['main'] = QVBoxLayout()
@@ -204,6 +227,32 @@ class AIAssistant(QWidget):
 
             self.t.requestFinished.connect(self.clear_input)
             self.t.start()
+    
+    def clear_input(self):
+        self.message_input.clear()
+
+    def update_status(self, status_type, message):
+        if status_type == 'error':
+            self.status.setStyleSheet('color: red;')
+        else:
+            self.status.setStyleSheet('color: white;')
+        self.status.showMessage(message)
+
+    def update_conversation(self, sender, content, usage):
+        if sender == 'user':
+            color = "#5caa00"
+            label = "[User]:"
+        else:
+            color = "#fd9620"
+            label = "[AI Assistant]:"
+            self.status.showMessage(f"Tokens used: {usage}")
+
+        text_cursor = self.conversation_window.textCursor()
+        text_cursor.movePosition(QTextCursor.MoveOperation.End)
+        self.conversation_window.setTextCursor(text_cursor)
+        self.conversation_window.insertHtml(f'<p style="color:{color}"> <strong>{label} </strong><br>')
+        self.conversation_window.insertHtml(content)
+        self.conversation_window.insertHtml('<br><br>')
 
     # input message method - reset
     def reset_input(self):
