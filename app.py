@@ -26,6 +26,7 @@ class ChatGPTThread(QThread):
     updateConversation_signal = pyqtSignal(str, str)
     updateStatus_signal = pyqtSignal(str, str)
     clear_input_signal = pyqtSignal()
+    request_finished_signal = pyqtSignal()
     
     def __init__(self, parent):
         super().__init__()
@@ -65,6 +66,8 @@ class ChatGPTThread(QThread):
                         self.updateConversation_signal.emit('ai', markdown_converted)
             except Exception as e:
                 print(e)
+            finally:
+                self.request_finished_signal.emit()
             
 
 class AIAssistant(QWidget):
@@ -181,6 +184,8 @@ class AIAssistant(QWidget):
         # Connect the updateConversation signal
         self.t.updateConversation_signal.connect(self.update_conversation)
 
+        self.t.request_finished_signal.connect(self.reset_sumbit_btn)
+
     # input message method - post
     def post_message(self):
         if not self.message_input.toPlainText():
@@ -228,10 +233,9 @@ class AIAssistant(QWidget):
         self.message_input.clear()
         self.status.clearMessage()
 
-    def clear_input(self):
+    def reset_sumbit_btn(self):
         self.btn_submit.setEnabled(True)
         self.btn_submit.setText('&Submit')
-        self.message_input.clear()  
 
     # Change font size of the current tab
     def font_zoom_in(self):
@@ -295,7 +299,6 @@ class AppWindow(QWidget):
         # We use the index 0 is because tab_manager is the first widget added to the main layout
         self.layout['main'].insertSpacing(0, 19)
 
-
         self.init_ui()
         self.init_configure_signal()
         self.init_menu()
@@ -357,8 +360,9 @@ class AppWindow(QWidget):
         # You need to use specific format by using inser_record method defined in db.py
         timestamp = current_timestamp('%Y-%m-%d, %H:%M:%S')
         active_tab = self.tab_manager.currentWidget()
+        # The way to access tab concontent in tab_manager
         messages = str(active_tab.chatgpt.messages).replace("'", "''")
-        values = f"{messages}', '{timestamp}'"
+        values = f"'{messages}', '{timestamp}'"
 
         db.insert_record('message_logs', 'messages, created_time', values)
         active_tab.status.showMessage('Record inserted')
@@ -395,7 +399,7 @@ if __name__ == '__main__':
         '''
             message_long_no INTEGER PRIMARY KEY AUTOINCREMENT,
             messages TEXT,
-            created TEXT
+            created_time TEXT
         '''
     )  
 
